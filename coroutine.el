@@ -1,4 +1,4 @@
-;;; coroutine.el --- Coroutines for Emacs Lisp
+;;; coroutine.el --- Coroutines for Emacs Lisp  -*- lexical-binding: t; -*-
 
 ;;;; used to be at http://www.ugcs.caltech.edu/~shulman/pub/Main/Software/coroutine.el
 
@@ -44,19 +44,20 @@
 
 (require 'cl)
 (require 'tagbody)
-
+(require 'cl-macs)
 ;; Copied from the code for `destructuring-bind' in `cl-macs.el' and
 ;; modified to set rather than bind.
 (defmacro destructuring-setq (args expr)
   "Same as `destructuring-bind', but sets instead of binding."
-  (let ((bind-lets nil) (bind-forms nil) (bind-inits nil)
-        (bind-defs nil) (bind-block 'cl-none))
-    (cl-do-arglist (or args '(&aux)) expr)
+
+  (let* ((cl--bind-lets nil) (cl--bind-forms nil) (cl--bind-defs nil)
+         (cl--bind-block 'cl-none) (cl--bind-enquote nil))
+    (cl--do-arglist (or args '(&aux)) expr)
     `(progn
-       ,@bind-inits
+       ,@cl--bind-enquote
        ,@(mapcar #'(lambda (pair) (cons 'setq pair))
-                 (nreverse bind-lets))
-       ,@(nreverse bind-forms))))
+                 (nreverse cl--bind-lets))
+       ,@(nreverse cl--bind-forms))))
 
 (defmacro define-coroutine (name arglist varlist &rest body)
   "Define NAME as a coroutine.
@@ -98,8 +99,8 @@ initialized to nil, and variables in ARGLIST are initialized from the
 arguments to the recursive call.  Both are saved separately for each
 recursive call."
   ;; Put all variables from ARGLIST into VARLIST as well
-  (labels ((flatten (obj) (if (listp obj) (mapcar #'flatten obj) obj))
-           (is&symbol (sym) (eq (aref (symbol-name sym) 0) ?&)))
+  (cl-labels ((flatten (obj) (if (listp obj) (mapcar #'flatten obj) obj))
+              (is&symbol (sym) (eq (aref (symbol-name sym) 0) ?&)))
     (setq varlist
           (remove-duplicates
            (nconc (remove-if #'is&symbol (flatten arglist))
@@ -161,17 +162,17 @@ recursive call."
                               (identity return-value)))))
                 )))
       (loop for formlist on body
-            with newforms
-            do (when (and (consp (car formlist))
-                          (memq (caar formlist) (mapcar #'car env)))
-                 ;; Expand the macro
-                 (setq newforms (macroexpand (car formlist) env))
-                 ;; Splice in the returned values
-                 (setcar formlist (car newforms))
-                 (setcdr formlist
-                         (nconc (cdr newforms) (cdr formlist)))
-                 ;; Fool the list into parsing the new forms as well.
-                 (setq formlist (cons nil formlist)))))
+         with newforms
+         do (when (and (consp (car formlist))
+                       (memq (caar formlist) (mapcar #'car env)))
+              ;; Expand the macro
+              (setq newforms (macroexpand (car formlist) env))
+              ;; Splice in the returned values
+              (setcar formlist (car newforms))
+              (setcdr formlist
+                      (nconc (cdr newforms) (cdr formlist)))
+              ;; Fool the list into parsing the new forms as well.
+              (setq formlist (cons nil formlist)))))
     ;; Hack to return the value of the last form correctly.  See the
     ;; docstring for the intended behavior.
     (when (or (symbolp (car (last body)))
@@ -185,23 +186,23 @@ recursive call."
          (let (return-value ,@varlist)
            (destructuring-setq ,arglist ,all-args)
            (tagbody
-            (when ,entry-point
-              ;; Continue a previous invocation
-              (multiple-value-setq ,varlist (cdr ,entry-point))
-              (setq return-value ,all-args)
-              (go* (prog1 (car ,entry-point)
-                     (setq ,entry-point nil))))
-            ,start
-            ,@(butlast body)
-            ;; Now return the value of the last form.
-            (if ,recursion-stack
-                ;; "Return" to a recursive "call"
-                (let ((return-point (pop ,recursion-stack)))
-                  (multiple-value-setq ,varlist (cdr return-point))
-                  (setq return-value ,(car (last body)))
-                  (go* (car return-point)))
-              ;; Final return to top-level
-              (return-from ,name ,(car (last body))))))))))
+              (when ,entry-point
+                ;; Continue a previous invocation
+                (multiple-value-setq ,varlist (cdr ,entry-point))
+                (setq return-value ,all-args)
+                (go* (prog1 (car ,entry-point)
+                       (setq ,entry-point nil))))
+              ,start
+              ,@(butlast body)
+              ;; Now return the value of the last form.
+              (if ,recursion-stack
+                  ;; "Return" to a recursive "call"
+                  (let ((return-point (pop ,recursion-stack)))
+                    (multiple-value-setq ,varlist (cdr return-point))
+                    (setq return-value ,(car (last body)))
+                    (go* (car return-point)))
+                ;; Final return to top-level
+                (return-from ,name ,(car (last body))))))))))
 
 (defmacro yield (value)
   "Inside a coroutine, yield VALUE and maintain state.
